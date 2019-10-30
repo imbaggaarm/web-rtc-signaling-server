@@ -1,5 +1,5 @@
-module github.com/imbaggaarm/signaling_server_2
+module github.com/imbaggaarm/web_rtc_signaling_server
 
 go 1.13
 
-require github.com/gorilla/websocket v1.4.1
+require github.com/gorilla/websocket v1.4.1 // indirect

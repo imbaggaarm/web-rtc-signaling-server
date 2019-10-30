@@ -8,6 +8,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+//mockup data for users name and password
+var user_accounts = make(map[string]string)
+
 var users = make(map[string]*websocket.Conn)
 
 var upgrader = websocket.Upgrader{
@@ -61,6 +64,11 @@ func main() {
 	// Configure websocket route
 	http.HandleFunc("/ws", handleConnections)
 
+	//create mock data with username and password
+	user_accounts["user1"] = "123456"
+	user_accounts["user2"] = "123456"
+	user_accounts["user3"] = "123456"
+
 	// Start the server on localhost port 8000 and log any errors
 	log.Println("http server started on :8000")
 	err := http.ListenAndServe(":8000", nil)
@@ -105,7 +113,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			err := ws.WriteJSON(Message{
 				Type: "LOGIN_RESPONSE",
 				Data: Data{
-					Success: false,
+					Success: true,
 				},
 			})
 			if err != nil {
