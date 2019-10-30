@@ -21,10 +21,14 @@ const (
 	APITypeOfferResponse = "OFFER_RESPONSE"
 	APITypeAnswer        = "ANSWER"
 	APITypeCandidate     = "CANDIDATE"
-	APITypeLeave         = "LEAVE"
+	APITypeOnlineStateChange = "ONLINE_STATE_CHANGE"
 
 	APIErrorWrongAuthentication = "Wrong email or password"
 	APIErrorUserNotValid        = "Username is not valid"
+
+	UserOnlineStateOffline      = 0
+	UserOnlineStateOnline       = 1
+	UserOnlineStateDoNotDisturb = 2
 )
 
 type (
@@ -37,7 +41,7 @@ type (
 		DisplayName       string `json:"display_name"`
 		ProfilePictureUrl string `json:"profile_picture_url"`
 		CoverPhotoUrl     string `json:"cover_photo_url"`
-		OnlineState       bool   `json:"online_state"`
+		OnlineState       int    `json:"online_state"`
 	}
 	Response struct {
 		Type    APIType     `json:"type"`
@@ -53,11 +57,12 @@ type (
 		FromID string `json:"from_id"`
 		ToID   string `json:"to_id"`
 
-		Username  string      `json:"username"`
-		Candidate interface{} `json:"candidate"`
-		Offer     interface{} `json:"offer"`
-		Answer    interface{} `json:"answer"`
-		Success   bool        `json:"success"`
+		Username    string      `json:"username"`
+		Candidate   interface{} `json:"candidate"`
+		Offer       interface{} `json:"offer"`
+		Answer      interface{} `json:"answer"`
+		Success     bool        `json:"success"`
+		OnlineState int         `json:"online_state"`
 	}
 	LoginResponse struct {
 		JWToken  string `json:"jwt"`
@@ -83,6 +88,8 @@ var (
 	userFriends = make(map[string][]*UserProfile)
 	// Websocket upgrader
 	upgrader = websocket.Upgrader{}
+
+	broadcast = make(chan Message)
 )
 
 func main() {
@@ -149,6 +156,8 @@ func main() {
 	userFriends["user3"] = []*UserProfile{&user1, &user4}
 	userFriends["user4"] = []*UserProfile{&user1, &user3}
 
+	// Handle broadcast message
+	go broadcastMessage()
 	// Start the server on localhost port 8000 and log any error
 	log.Println("http server started on :8000")
 	err := http.ListenAndServe(":8000", r)
@@ -293,12 +302,14 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 
 	// Upgrade initial GET request to a websocket
 	ws, err := upgrader.Upgrade(w, r, nil)
-	//add con to user conns
-	print(jwtObject.Username)
-	userConns[jwtObject.Username] = ws
 	if err != nil {
 		log.Println("error")
 	}
+	// Add conn to user conns
+	username := jwtObject.Username
+	userConns[username] = ws
+	userProfiles[username].OnlineState = UserOnlineStateOnline
+
 	log.Printf("connected from: %s", ws.RemoteAddr().String())
 	// Make sure we close the connection when the function returns
 	defer ws.Close()
@@ -308,17 +319,23 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 		err := ws.ReadJSON(&msg)
 		if err != nil {
 			log.Println("Read error:", err)
-			for userID, conn := range userConns {
-				if conn == ws {
-					delete(userConns, userID)
-					break
-				}
+			delete(userConns, username)
+			userProfiles[username].OnlineState = UserOnlineStateOffline
+			// notify friends that this user going to offline
+			msg := Message{
+				Type: APITypeOnlineStateChange,
+				Data: Data{
+					Username: username,
+					OnlineState: UserOnlineStateOffline,
+				},
 			}
+			//broadcast this message
+			broadcast <- msg
+
 			break
 		}
 		switch msg.Type {
 		case APITypeOffer:
-
 			conn := userConns[msg.Data.ToID]
 			if conn != nil {
 				log.Println("Sending offer to:", msg.Data.ToID)
@@ -358,10 +375,29 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 					log.Println("Write error:", err)
 				}
 			}
-		case APITypeLeave:
-			break
+		case APITypeOnlineStateChange:
+			broadcast <- msg
 		default:
 			log.Println("Error: Unexpected type: ", msg.Type)
+		}
+	}
+}
+
+func broadcastMessage() {
+	for {
+		msg := <-broadcast
+		username := msg.Data.Username
+
+		if friends, ok := userFriends[username]; ok {
+			for _, friend := range friends {
+				if friend.OnlineState != UserOnlineStateOffline {
+					conn := userConns[friend.Username]
+					err := conn.WriteJSON(msg)
+					if err != nil {
+						log.Printf("error: %v", err)
+					}
+				}
+			}
 		}
 	}
 }
