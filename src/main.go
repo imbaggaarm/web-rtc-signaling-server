@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +37,7 @@ type (
 		DisplayName       string `json:"display_name"`
 		ProfilePictureUrl string `json:"profile_picture_url"`
 		CoverPhotoUrl     string `json:"cover_photo_url"`
+		OnlineState       bool   `json:"online_state"`
 	}
 	Response struct {
 		Type    APIType     `json:"type"`
@@ -62,6 +62,11 @@ type (
 	LoginResponse struct {
 		JWToken  string `json:"jwt"`
 		Username string `json:"username"`
+	}
+
+	JWT struct {
+		Username string `json:"username"`
+		Exp      int64  `json:"exp"`
 	}
 )
 
@@ -215,7 +220,7 @@ func handleFriends(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func authenticateUser(email string, password string, remoteAddr string) (success bool, data *LoginResponse, err string) {
+func authenticateUser(email string, password string) (success bool, data *LoginResponse, err string) {
 	email = strings.ToLower(email)
 	if email == "" {
 		err = APIErrorWrongAuthentication
@@ -226,11 +231,14 @@ func authenticateUser(email string, password string, remoteAddr string) (success
 		if password == pass {
 			success = true
 			exp := time.Now().Unix() + 30*60 //expired after 30 minutes
-			strJWT := email + "+" + strconv.FormatInt(exp, 10) + "+" + remoteAddr
-			log.Println(strJWT)
-			jwt := b64.StdEncoding.EncodeToString([]byte(strJWT))
+			var oJWT = JWT{
+				Username: usernames[email],
+				Exp:      exp,
+			}
+			b, _ := json.Marshal(oJWT)
+			jwt := b64.StdEncoding.EncodeToString([]byte(b))
 			data = &LoginResponse{
-				JWToken: jwt,
+				JWToken:  jwt,
 				Username: usernames[email],
 			}
 		} else {
@@ -248,16 +256,13 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if err := r.ParseForm(); err != nil {
-		fmt.Fprintf(w, "ParseForm() err: %v", err)
+		_, _ = fmt.Fprintf(w, "ParseForm() err: %v", err)
 		return
 	}
 	email := r.FormValue("email")
 	password := r.FormValue("password")
 
-	log.Println(email)
-	log.Println(password)
-
-	success, data, authErr := authenticateUser(email, password, r.RemoteAddr)
+	success, data, authErr := authenticateUser(email, password)
 	response := Response{
 		Type:    APITypeLogin,
 		Success: success,
@@ -268,12 +273,33 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleWSConnections(w http.ResponseWriter, r *http.Request) {
+	keys, ok := r.URL.Query()["token"]
+	if !ok || len(keys[0]) < 1 {
+		_, _ = w.Write([]byte("Wrong authentication"))
+		return
+	}
+	jwt := keys[0]
+	data, _ := b64.StdEncoding.DecodeString(jwt)
+	jwtObject := &JWT{}
+	err := json.Unmarshal(data, jwtObject)
+	if err != nil {
+		_, _ = w.Write([]byte("Wrong authentication"))
+		return
+	}
+	if jwtObject.Exp <= time.Now().Unix() {
+		_, _ = w.Write([]byte("Token expired"))
+		return
+	}
+
 	// Upgrade initial GET request to a websocket
 	ws, err := upgrader.Upgrade(w, r, nil)
+	//add con to user conns
+	print(jwtObject.Username)
+	userConns[jwtObject.Username] = ws
 	if err != nil {
-		log.Fatal(err)
+		log.Println("error")
 	}
-	log.Printf("connected from: %s", ws.RemoteAddr())
+	log.Printf("connected from: %s", ws.RemoteAddr().String())
 	// Make sure we close the connection when the function returns
 	defer ws.Close()
 
@@ -291,20 +317,6 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		switch msg.Type {
-		case APITypeLogin:
-			//save user connection on the server
-			userConns[msg.Data.Username] = ws
-
-			//return login result
-			err := ws.WriteJSON(Message{
-				Type: "LOGIN_RESPONSE",
-				Data: Data{
-					Success: true,
-				},
-			})
-			if err != nil {
-				log.Println("Write error:", err)
-			}
 		case APITypeOffer:
 
 			conn := userConns[msg.Data.ToID]
