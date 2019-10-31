@@ -153,8 +153,8 @@ func main() {
 
 	userFriends["user1"] = []*UserProfile{&user2, &user3, &user4}
 	userFriends["user2"] = []*UserProfile{&user1, &user3, &user4}
-	userFriends["user3"] = []*UserProfile{&user1, &user4}
-	userFriends["user4"] = []*UserProfile{&user1, &user3}
+	userFriends["user3"] = []*UserProfile{&user1, &user2, &user4}
+	userFriends["user4"] = []*UserProfile{&user1, &user2 , &user3}
 
 	// Handle broadcast message
 	go broadcastMessage()
