@@ -14,18 +14,21 @@ import (
 )
 
 const (
-	APITypeLogin         = "LOGIN"
-	APITypeProfile       = "PROFILE"
-	APITypeFriends       = "FRIENDS"
-	APITypeOffer         = "OFFER"
-	APITypeOfferResponse = "OFFER_RESPONSE"
-	APITypeAnswer        = "ANSWER"
-	APITypeCandidate     = "CANDIDATE"
+	APITypeLogin             = "LOGIN"
+	APITypeProfile           = "PROFILE"
+	APITypeFriends           = "FRIENDS"
+	APITypeOffer             = "OFFER"
+	APITypeOfferResponse     = "OFFER_RESPONSE"
+	APITypeAnswer            = "ANSWER"
+	APITypeCandidate         = "CANDIDATE"
 	APITypeOnlineStateChange = "ONLINE_STATE_CHANGE"
+	APITypeFriendRequest     = "FRIEND_REQUEST"
+	APITypeRegister          = "REGISTER"
+	APITypeUpdateUserProfile = "UPDATE_PROFILE"
 
 	APIErrorWrongAuthentication = "Wrong email or password"
 	APIErrorUserNotValid        = "Username is not valid"
-
+	APIErrorUserExisted         = "User existed"
 	UserOnlineStateOffline      = 0
 	UserOnlineStateOnline       = 1
 	UserOnlineStateDoNotDisturb = 2
@@ -68,7 +71,6 @@ type (
 		JWToken  string `json:"jwt"`
 		Username string `json:"username"`
 	}
-
 	JWT struct {
 		Username string `json:"username"`
 		Exp      int64  `json:"exp"`
@@ -100,12 +102,16 @@ func main() {
 	api := r.PathPrefix("/api/v1").Subrouter()
 	// Configure websocket route
 	api.HandleFunc("/ws", handleWSConnections)
+	// Configure register route
+	api.HandleFunc("/register", handleRegister).Methods(http.MethodPost)
 	// Configure login route
 	api.HandleFunc("/login", handleLogin).Methods(http.MethodPost)
 	// Configure user route
-	api.HandleFunc("/{username}", handleUserInfo).Methods(http.MethodGet)
+	api.HandleFunc("/{username}", handleUserProfile).Methods(http.MethodGet)
 	// Configure user's friends route
 	api.HandleFunc("/{username}/friends", handleFriends).Methods(http.MethodGet)
+	// Configure update profile route
+	api.HandleFunc("/{username}/update_profile", handleUpdateUserProfile).Methods(http.MethodPost)
 	//create mock data with username and password
 	userAccounts["user1@gmail.com"] = "123456"
 	userAccounts["user2@gmail.com"] = "123456"
@@ -154,7 +160,7 @@ func main() {
 	userFriends["user1"] = []*UserProfile{&user2, &user3, &user4}
 	userFriends["user2"] = []*UserProfile{&user1, &user3, &user4}
 	userFriends["user3"] = []*UserProfile{&user1, &user2, &user4}
-	userFriends["user4"] = []*UserProfile{&user1, &user2 , &user3}
+	userFriends["user4"] = []*UserProfile{&user1, &user2, &user3}
 
 	// Handle broadcast message
 	go broadcastMessage()
@@ -175,7 +181,7 @@ func writeResponse(w http.ResponseWriter, response Response) {
 	w.Write(js)
 }
 
-func handleUserInfo(w http.ResponseWriter, r *http.Request) {
+func handleUserProfile(w http.ResponseWriter, r *http.Request) {
 	pathParams := mux.Vars(r)
 	username := ""
 	w.Header().Set("Content-Type", "application/json")
@@ -197,6 +203,28 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 				Error:   "Username is not valid",
 			}
 			writeResponse(w, response)
+		}
+	}
+}
+
+func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
+	pathParams := mux.Vars(r)
+	w.Header().Set("Content-Type", "application/json")
+	if err := r.ParseForm(); err != nil {
+		_, _ = fmt.Fprintf(w, "ParseForm() err: %v", err)
+		return
+	}
+
+	if username, ok := pathParams["username"]; ok {
+		//get params
+		displayName := r.FormValue("display_name")
+		profilePictureUrl := r.FormValue("profile_picture_url")
+		coverPhotoUrl := r.FormValue("cover_photo_url")
+
+		if userProfile, ok := userProfiles[username]; ok {
+			userProfile.DisplayName = displayName
+			userProfile.ProfilePictureUrl = profilePictureUrl
+			userProfile.CoverPhotoUrl = coverPhotoUrl
 		}
 	}
 }
@@ -281,13 +309,50 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, response)
 }
 
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := r.ParseForm(); err != nil {
+		_, _ = fmt.Fprintf(w, "ParseForm() err: %v", err)
+		return
+	}
+	email := r.FormValue("email")
+	if _, ok := userAccounts[email]; ok {
+		response := Response{
+			Type:    APITypeRegister,
+			Success: false,
+			Data:    nil,
+			Error:   APIErrorUserExisted,
+		}
+		writeResponse(w, response)
+		return
+	}
+
+	password := r.FormValue("password")
+
+	// Set user account with password
+	userAccounts[email] = password
+	// Set user email with username
+	usernames[email] = email
+	// Set user profile
+
+
+	_, data, _ := authenticateUser(email, password)
+	response := Response{
+		Type:    APITypeRegister,
+		Success: true,
+		Data:    data,
+		Error:   "",
+	}
+	writeResponse(w, response)
+}
+
 func handleWSConnections(w http.ResponseWriter, r *http.Request) {
-	keys, ok := r.URL.Query()["token"]
-	if !ok || len(keys[0]) < 1 {
+	jwt := r.URL.Query().Get("token")
+	if jwt == "" {
 		_, _ = w.Write([]byte("Wrong authentication"))
 		return
 	}
-	jwt := keys[0]
+
 	data, _ := b64.StdEncoding.DecodeString(jwt)
 	jwtObject := &JWT{}
 	err := json.Unmarshal(data, jwtObject)
@@ -325,7 +390,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			msg := Message{
 				Type: APITypeOnlineStateChange,
 				Data: Data{
-					Username: username,
+					Username:    username,
 					OnlineState: UserOnlineStateOffline,
 				},
 			}
