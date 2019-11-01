@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,9 +28,15 @@ const (
 	APITypeRegister          = "REGISTER"
 	APITypeUpdateUserProfile = "UPDATE_PROFILE"
 
+	APIParameterKeyEmail = "email"
+	APIParameterKeyPassword = "password"
+	APIParameterKeyUsername = "username"
+
 	APIErrorWrongAuthentication = "Wrong email or password"
 	APIErrorUserNotValid        = "Username is not valid"
 	APIErrorUserExisted         = "User existed"
+	APIErrorAuthenticationFailed = "Authentication failed"
+
 	UserOnlineStateOffline      = 0
 	UserOnlineStateOnline       = 1
 	UserOnlineStateDoNotDisturb = 2
@@ -72,6 +80,7 @@ type (
 		Username string `json:"username"`
 	}
 	JWT struct {
+		Email string `json:"email"`
 		Username string `json:"username"`
 		Exp      int64  `json:"exp"`
 	}
@@ -92,6 +101,7 @@ var (
 	upgrader = websocket.Upgrader{}
 
 	broadcast = make(chan Message)
+	userOnlines = make(chan string)
 )
 
 func main() {
@@ -102,10 +112,10 @@ func main() {
 	api := r.PathPrefix("/api/v1").Subrouter()
 	// Configure websocket route
 	api.HandleFunc("/ws", handleWSConnections)
-	// Configure register route
-	api.HandleFunc("/register", handleRegister).Methods(http.MethodPost)
-	// Configure login route
-	api.HandleFunc("/login", handleLogin).Methods(http.MethodPost)
+	// Configure auth register route
+	api.HandleFunc("/auth/register", handleRegister).Methods(http.MethodPost)
+	// Configure auth login route
+	api.HandleFunc("/auth/login", handleLogin).Methods(http.MethodPost)
 	// Configure user route
 	api.HandleFunc("/{username}", handleUserProfile).Methods(http.MethodGet)
 	// Configure user's friends route
@@ -164,6 +174,7 @@ func main() {
 
 	// Handle broadcast message
 	go broadcastMessage()
+	go setOnlineUser()
 	// Start the server on localhost port 8000 and log any error
 	log.Println("http server started on :8000")
 	err := http.ListenAndServe(":8000", r)
@@ -208,10 +219,24 @@ func handleUserProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
+	//check auth
 	pathParams := mux.Vars(r)
 	w.Header().Set("Content-Type", "application/json")
 	if err := r.ParseForm(); err != nil {
 		_, _ = fmt.Fprintf(w, "ParseForm() err: %v", err)
+		return
+	}
+
+	jwt := r.FormValue("jwt")
+	jwtObj, err := decodeJWT(jwt)
+	if err != nil {
+		response := Response{
+			Type:    APITypeUpdateUserProfile,
+			Success: false,
+			Data:    nil,
+			Error:   APIErrorAuthenticationFailed,
+		}
+		writeResponse(w, response)
 		return
 	}
 
@@ -222,10 +247,26 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		coverPhotoUrl := r.FormValue("cover_photo_url")
 
 		if userProfile, ok := userProfiles[username]; ok {
+			// update
 			userProfile.DisplayName = displayName
 			userProfile.ProfilePictureUrl = profilePictureUrl
 			userProfile.CoverPhotoUrl = coverPhotoUrl
+		} else {
+			//create new
+			newUser := &UserProfile{
+				Username:          username,
+				Email:             jwtObj.Email,
+				DisplayName:       displayName,
+				ProfilePictureUrl: profilePictureUrl,
+				CoverPhotoUrl:     coverPhotoUrl,
+				OnlineState:       0,
+			}
+
+			// set user profile
+			userProfiles[username] = newUser
 		}
+		// write response
+
 	}
 }
 
@@ -269,6 +310,7 @@ func authenticateUser(email string, password string) (success bool, data *LoginR
 			success = true
 			exp := time.Now().Unix() + 30*60 //expired after 30 minutes
 			var oJWT = JWT{
+				Email: email,
 				Username: usernames[email],
 				Exp:      exp,
 			}
@@ -296,8 +338,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, "ParseForm() err: %v", err)
 		return
 	}
-	email := r.FormValue("email")
-	password := r.FormValue("password")
+	email := r.FormValue(APIParameterKeyEmail)
+	password := r.FormValue(APIParameterKeyPassword)
 
 	success, data, authErr := authenticateUser(email, password)
 	response := Response{
@@ -309,53 +351,63 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, response)
 }
 
+func randIn(low, hi int) int {
+	return low + rand.Intn(hi-low)
+}
+
+func createRandomUsername(email string) string {
+	parts := strings.Split(email, "@")
+	return parts[0] + strconv.Itoa(randIn(1000, 9999))
+}
+
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := r.ParseForm(); err != nil {
 		_, _ = fmt.Fprintf(w, "ParseForm() err: %v", err)
 		return
 	}
-	email := r.FormValue("email")
+	email := r.FormValue(APIParameterKeyEmail)
+	//check valid email or not
+	//check email existed or not
 	if _, ok := userAccounts[email]; ok {
 		response := Response{
 			Type:    APITypeRegister,
 			Success: false,
-			Data:    nil,
 			Error:   APIErrorUserExisted,
 		}
 		writeResponse(w, response)
 		return
 	}
 
-	password := r.FormValue("password")
-
+	password := r.FormValue(APIParameterKeyPassword)
 	// Set user account with password
 	userAccounts[email] = password
-	// Set user email with username
-	usernames[email] = email
-	// Set user profile
+	// Create random username and set to username list
+	usernames[email] = createRandomUsername(email)
 
-
+	// Create jwt
 	_, data, _ := authenticateUser(email, password)
 	response := Response{
 		Type:    APITypeRegister,
 		Success: true,
-		Data:    data,
-		Error:   "",
+		Data: data,
 	}
 	writeResponse(w, response)
 }
 
+func decodeJWT(jwt string) (JWT, error) {
+	data, _ := b64.StdEncoding.DecodeString(jwt)
+	jwtObject := &JWT{}
+	err := json.Unmarshal(data, jwtObject)
+	return *(jwtObject), err
+}
 func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 	jwt := r.URL.Query().Get("token")
 	if jwt == "" {
 		_, _ = w.Write([]byte("Wrong authentication"))
 		return
 	}
-
-	data, _ := b64.StdEncoding.DecodeString(jwt)
-	jwtObject := &JWT{}
-	err := json.Unmarshal(data, jwtObject)
+	jwtObject, err := decodeJWT(jwt)
 	if err != nil {
 		_, _ = w.Write([]byte("Wrong authentication"))
 		return
@@ -370,10 +422,11 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println("error")
 	}
+	// Add to chain
 	// Add conn to user conns
 	username := jwtObject.Username
 	userConns[username] = ws
-	userProfiles[username].OnlineState = UserOnlineStateOnline
+	userOnlines <- username
 
 	log.Printf("connected from: %s", ws.RemoteAddr().String())
 	// Make sure we close the connection when the function returns
@@ -464,5 +517,12 @@ func broadcastMessage() {
 				}
 			}
 		}
+	}
+}
+
+func setOnlineUser() {
+	for {
+		username := <-userOnlines
+		userProfiles[username].OnlineState = UserOnlineStateOnline
 	}
 }
