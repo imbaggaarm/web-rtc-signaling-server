@@ -31,6 +31,7 @@ const (
 	APIParameterKeyEmail = "email"
 	APIParameterKeyPassword = "password"
 	APIParameterKeyUsername = "username"
+	APIParameterKeyToken = "token"
 
 	APIErrorWrongAuthentication = "Wrong email or password"
 	APIErrorUserNotValid        = "Username is not valid"
@@ -76,8 +77,9 @@ type (
 		OnlineState int         `json:"online_state"`
 	}
 	LoginResponse struct {
-		JWToken  string `json:"jwt"`
+		JWToken  string `json:"token"`
 		Username string `json:"username"`
+		Email string `json:"email"`
 	}
 	JWT struct {
 		Email string `json:"email"`
@@ -227,7 +229,7 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwt := r.FormValue("jwt")
+	jwt := r.FormValue("token")
 	jwtObj, err := decodeJWT(jwt)
 	if err != nil {
 		response := Response{
@@ -240,20 +242,22 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if username, ok := pathParams["username"]; ok {
+	if username, ok := pathParams[APIParameterKeyUsername]; ok {
 		//get params
 		displayName := r.FormValue("display_name")
 		profilePictureUrl := r.FormValue("profile_picture_url")
 		coverPhotoUrl := r.FormValue("cover_photo_url")
 
+		var uProfile *UserProfile
 		if userProfile, ok := userProfiles[username]; ok {
 			// update
+			uProfile = userProfile
 			userProfile.DisplayName = displayName
 			userProfile.ProfilePictureUrl = profilePictureUrl
 			userProfile.CoverPhotoUrl = coverPhotoUrl
 		} else {
 			//create new
-			newUser := &UserProfile{
+			uProfile = &UserProfile{
 				Username:          username,
 				Email:             jwtObj.Email,
 				DisplayName:       displayName,
@@ -263,10 +267,17 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// set user profile
-			userProfiles[username] = newUser
+			userProfiles[username] = uProfile
 		}
-		// write response
 
+		// write response
+		response := Response{
+			Type:    APITypeUpdateUserProfile,
+			Success: true,
+			Data:    uProfile,
+			Error:   "",
+		}
+		writeResponse(w, response)
 	}
 }
 
@@ -319,6 +330,7 @@ func authenticateUser(email string, password string) (success bool, data *LoginR
 			data = &LoginResponse{
 				JWToken:  jwt,
 				Username: usernames[email],
+				Email: email,
 			}
 		} else {
 			err = APIErrorWrongAuthentication
