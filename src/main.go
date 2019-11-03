@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	APITypeLogout            = "LOGOUT"
 	APITypeLogin             = "LOGIN"
 	APITypeProfile           = "PROFILE"
 	APITypeFriends           = "FRIENDS"
@@ -28,14 +29,14 @@ const (
 	APITypeRegister          = "REGISTER"
 	APITypeUpdateUserProfile = "UPDATE_PROFILE"
 
-	APIParameterKeyEmail = "email"
+	APIParameterKeyEmail    = "email"
 	APIParameterKeyPassword = "password"
 	APIParameterKeyUsername = "username"
-	APIParameterKeyToken = "token"
+	APIParameterKeyToken    = "token"
 
-	APIErrorWrongAuthentication = "Wrong email or password"
-	APIErrorUserNotValid        = "Username is not valid"
-	APIErrorUserExisted         = "User existed"
+	APIErrorWrongAuthentication  = "Wrong email or password"
+	APIErrorUserNotValid         = "Username is not valid"
+	APIErrorUserExisted          = "User existed"
 	APIErrorAuthenticationFailed = "Authentication failed"
 
 	UserOnlineStateOffline      = 0
@@ -79,10 +80,10 @@ type (
 	LoginResponse struct {
 		JWToken  string `json:"token"`
 		Username string `json:"username"`
-		Email string `json:"email"`
+		Email    string `json:"email"`
 	}
 	JWT struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
 		Username string `json:"username"`
 		Exp      int64  `json:"exp"`
 	}
@@ -102,7 +103,7 @@ var (
 	// Websocket upgrader
 	upgrader = websocket.Upgrader{}
 
-	broadcast = make(chan Message)
+	broadcast   = make(chan Message)
 	userOnlines = make(chan string)
 )
 
@@ -118,6 +119,8 @@ func main() {
 	api.HandleFunc("/auth/register", handleRegister).Methods(http.MethodPost)
 	// Configure auth login route
 	api.HandleFunc("/auth/login", handleLogin).Methods(http.MethodPost)
+	// Configure auth logout route
+	api.HandleFunc("/auth/logout", handleLogout).Methods(http.MethodGet)
 	// Configure user route
 	api.HandleFunc("/{username}", handleUserProfile).Methods(http.MethodGet)
 	// Configure user's friends route
@@ -242,12 +245,11 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if username, ok := pathParams[APIParameterKeyUsername]; ok {
+	if username, ok := pathParams["username"]; ok {
 		//get params
 		displayName := r.FormValue("display_name")
 		profilePictureUrl := r.FormValue("profile_picture_url")
 		coverPhotoUrl := r.FormValue("cover_photo_url")
-
 		var uProfile *UserProfile
 		if userProfile, ok := userProfiles[username]; ok {
 			// update
@@ -255,6 +257,7 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 			userProfile.DisplayName = displayName
 			userProfile.ProfilePictureUrl = profilePictureUrl
 			userProfile.CoverPhotoUrl = coverPhotoUrl
+
 		} else {
 			//create new
 			uProfile = &UserProfile{
@@ -300,8 +303,8 @@ func handleFriends(w http.ResponseWriter, r *http.Request) {
 		} else {
 			response := Response{
 				Type:    APITypeFriends,
-				Success: false,
-				Data:    nil,
+				Success: true,
+				Data:    []*UserProfile{},
 				Error:   APIErrorUserNotValid,
 			}
 			writeResponse(w, response)
@@ -321,7 +324,7 @@ func authenticateUser(email string, password string) (success bool, data *LoginR
 			success = true
 			exp := time.Now().Unix() + 30*60 //expired after 30 minutes
 			var oJWT = JWT{
-				Email: email,
+				Email:    email,
 				Username: usernames[email],
 				Exp:      exp,
 			}
@@ -330,7 +333,7 @@ func authenticateUser(email string, password string) (success bool, data *LoginR
 			data = &LoginResponse{
 				JWToken:  jwt,
 				Username: usernames[email],
-				Email: email,
+				Email:    email,
 			}
 		} else {
 			err = APIErrorWrongAuthentication
@@ -359,6 +362,17 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Success: success,
 		Data:    data,
 		Error:   authErr,
+	}
+	writeResponse(w, response)
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	response := Response{
+		Type:    APITypeLogout,
+		Success: true,
+		Error: "",
 	}
 	writeResponse(w, response)
 }
@@ -402,7 +416,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	response := Response{
 		Type:    APITypeRegister,
 		Success: true,
-		Data: data,
+		Data:    data,
 	}
 	writeResponse(w, response)
 }
