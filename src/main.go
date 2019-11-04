@@ -201,7 +201,7 @@ func handleUserProfile(w http.ResponseWriter, r *http.Request) {
 	pathParams := mux.Vars(r)
 	username := ""
 	w.Header().Set("Content-Type", "application/json")
-	if val, ok := pathParams["username"]; ok {
+	if val, ok := pathParams[APIParameterKeyUsername]; ok {
 		username = val
 		if user, ok := userProfiles[username]; ok {
 			response := Response{
@@ -232,7 +232,7 @@ func handleUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwt := r.FormValue("token")
+	jwt := r.FormValue(APIParameterKeyToken)
 	jwtObj, err := decodeJWT(jwt)
 	if err != nil {
 		response := Response{
@@ -428,7 +428,7 @@ func decodeJWT(jwt string) (JWT, error) {
 	return *(jwtObject), err
 }
 func handleWSConnections(w http.ResponseWriter, r *http.Request) {
-	jwt := r.URL.Query().Get("token")
+	jwt := r.URL.Query().Get(APIParameterKeyToken)
 	if jwt == "" {
 		_, _ = w.Write([]byte("Wrong authentication"))
 		return
@@ -462,7 +462,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 		var msg Message
 		err := ws.ReadJSON(&msg)
 		if err != nil {
-			log.Println("Read error:", err)
+			log.Println("User disconnected:", err)
 			delete(userConns, username)
 			userProfiles[username].OnlineState = UserOnlineStateOffline
 			// notify friends that this user going to offline
