@@ -475,7 +475,6 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			}
 			//broadcast this message
 			broadcast <- msg
-
 			break
 		}
 		switch msg.Type {
