@@ -20,14 +20,14 @@ const (
 	APITypeLogin             = "LOGIN"
 	APITypeProfile           = "PROFILE"
 	APITypeFriends           = "FRIENDS"
-	APITypeOffer             = "OFFER"
-	APITypeOfferResponse     = "OFFER_RESPONSE"
-	APITypeAnswer            = "ANSWER"
-	APITypeCandidate         = "CANDIDATE"
-	APITypeOnlineStateChange = "ONLINE_STATE_CHANGE"
-	APITypeFriendRequest     = "FRIEND_REQUEST"
 	APITypeRegister          = "REGISTER"
 	APITypeUpdateUserProfile = "UPDATE_PROFILE"
+
+	APIWSTypeOffer             = "OFFER"
+	APIWSTypeOfferResponse     = "OFFER_RESPONSE"
+	APIWSTypeAnswer            = "ANSWER"
+	APIWSTypeCandidate         = "CANDIDATE"
+	APIWSTypeOnlineStateChange = "ONLINE_STATE_CHANGE"
 
 	APIParameterKeyEmail    = "email"
 	APIParameterKeyPassword = "password"
@@ -38,6 +38,7 @@ const (
 	APIErrorUserNotValid         = "Username is not valid"
 	APIErrorUserExisted          = "User existed"
 	APIErrorAuthenticationFailed = "Authentication failed"
+	APIErrorTokenExpired         = "Token expired"
 
 	UserOnlineStateOffline      = 0
 	UserOnlineStateOnline       = 1
@@ -56,16 +57,19 @@ type (
 		CoverPhotoUrl     string `json:"cover_photo_url"`
 		OnlineState       int    `json:"online_state"`
 	}
+
 	Response struct {
 		Type    APIType     `json:"type"`
 		Success bool        `json:"success"`
 		Data    interface{} `json:"data"`
 		Error   APIError    `json:"error"`
 	}
+
 	Message struct {
 		Type string `json:"type"`
 		Data Data   `json:"data"`
 	}
+
 	Data struct {
 		FromID string `json:"from_id"`
 		ToID   string `json:"to_id"`
@@ -77,6 +81,7 @@ type (
 		Success     bool        `json:"success"`
 		OnlineState int         `json:"online_state"`
 	}
+
 	LoginResponse struct {
 		JWToken  string `json:"token"`
 		Username string `json:"username"`
@@ -368,11 +373,11 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	response := Response{
 		Type:    APITypeLogout,
 		Success: true,
-		Error: "",
+		Error:   "",
 	}
 	writeResponse(w, response)
 }
@@ -409,8 +414,9 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Set user account with password
 	userAccounts[email] = password
 	// Create random username and set to username list
-	usernames[email] = createRandomUsername(email)
-
+	username := createRandomUsername(email)
+	usernames[email] = username
+	userFriends[username] = []*UserProfile{}
 	// Create jwt
 	_, data, _ := authenticateUser(email, password)
 	response := Response{
@@ -430,16 +436,16 @@ func decodeJWT(jwt string) (JWT, error) {
 func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 	jwt := r.URL.Query().Get(APIParameterKeyToken)
 	if jwt == "" {
-		_, _ = w.Write([]byte("Wrong authentication"))
+		_, _ = w.Write([]byte(APIErrorAuthenticationFailed))
 		return
 	}
 	jwtObject, err := decodeJWT(jwt)
 	if err != nil {
-		_, _ = w.Write([]byte("Wrong authentication"))
+		_, _ = w.Write([]byte(APIErrorAuthenticationFailed))
 		return
 	}
 	if jwtObject.Exp <= time.Now().Unix() {
-		_, _ = w.Write([]byte("Token expired"))
+		_, _ = w.Write([]byte(APIErrorTokenExpired))
 		return
 	}
 
@@ -467,7 +473,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			userProfiles[username].OnlineState = UserOnlineStateOffline
 			// notify friends that this user going to offline
 			msg := Message{
-				Type: APITypeOnlineStateChange,
+				Type: APIWSTypeOnlineStateChange,
 				Data: Data{
 					Username:    username,
 					OnlineState: UserOnlineStateOffline,
@@ -478,7 +484,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		switch msg.Type {
-		case APITypeOffer:
+		case APIWSTypeOffer:
 			conn := userConns[msg.Data.ToID]
 			if conn != nil {
 				log.Println("Sending offer to:", msg.Data.ToID)
@@ -489,7 +495,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			} else {
 				log.Println("User", msg.Data.ToID, "not online")
 				err := ws.WriteJSON(Message{
-					Type: APITypeOfferResponse,
+					Type: APIWSTypeOfferResponse,
 					Data: Data{
 						FromID:  msg.Data.ToID,
 						Success: false,
@@ -499,7 +505,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 					log.Println("Write error:", err)
 				}
 			}
-		case APITypeAnswer:
+		case APIWSTypeAnswer:
 			conn := userConns[msg.Data.ToID]
 			if conn != nil {
 				log.Println("Sending answer to:", msg.Data.ToID)
@@ -508,7 +514,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 					log.Println("Write error:", err)
 				}
 			}
-		case APITypeCandidate:
+		case APIWSTypeCandidate:
 			//handle send candidate to user
 			conn := userConns[msg.Data.ToID]
 			if conn != nil {
@@ -518,7 +524,7 @@ func handleWSConnections(w http.ResponseWriter, r *http.Request) {
 					log.Println("Write error:", err)
 				}
 			}
-		case APITypeOnlineStateChange:
+		case APIWSTypeOnlineStateChange:
 			broadcast <- msg
 		default:
 			log.Println("Error: Unexpected type: ", msg.Type)
@@ -548,6 +554,8 @@ func broadcastMessage() {
 func setOnlineUser() {
 	for {
 		username := <-userOnlines
-		userProfiles[username].OnlineState = UserOnlineStateOnline
+		if user, ok := userProfiles[username]; ok {
+			user.OnlineState = UserOnlineStateOnline
+		}
 	}
 }
